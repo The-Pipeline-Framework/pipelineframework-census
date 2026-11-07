@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createWorker } from '../src/worker.js';
 import { ingest, prune } from '../src/store.js';
-import { aggregate, publicStatistics } from '../src/aggregate.js';
+import { publicStatistics } from '../src/aggregate.js';
 import { validObservation, periodStarts } from '../src/protocol.js';
 const now = new Date('2026-10-04T12:00:00Z');
 function event(overrides = {}) {
@@ -76,7 +76,7 @@ test('monthly counts use distinct instances and latest samples, not builds', asy
     await ingest(db, sample, '2026-09-01');
     await ingest(db, { ...sample, observed_at: '2026-09-28', java_major: 25 }, '2026-09-28');
   }
-  await aggregate(db, now);
+  await createWorker(() => now).scheduled({}, { CENSUS_DB: db, PUBLIC_STATISTICS_ENABLED: 'true' });
   const stats = JSON.parse(db.sql.prepare('SELECT statistics_json FROM public_statistics').get().statistics_json);
   assert.equal(stats.reporting_application_instances, 20); assert.equal(stats.reporting_installations, 20);
   assert.deepEqual(stats.distributions.java_major.counts, { 25: 20 });
@@ -100,6 +100,20 @@ test('retention and privacy tombstones remove private events and memberships', a
   assert.equal(await ingest(db, current, '2026-10-04'), 429);
 });
 
+test('cron prunes restored private data while monthly statistics are disabled', async () => {
+  for (const statistics of [{}, { PUBLIC_STATISTICS_ENABLED: 'false' }]) {
+    const db = new D1();
+    const expired = event({ observed_at: '2026-01-01' });
+    const restored = event({ observed_at: '2026-09-28' });
+    await ingest(db, expired, expired.observed_at);
+    await ingest(db, restored, restored.observed_at);
+    await createWorker(() => now).scheduled({}, { CENSUS_DB: db, INGESTION_ENABLED: 'false', ...statistics });
+    assert.deepEqual(db.sql.prepare('SELECT installation_id FROM observations').all().map(row => row.installation_id), [restored.installation_id]);
+    assert.equal(db.sql.prepare('SELECT count(*) AS n FROM period_membership').get().n, 2);
+    assert.equal(db.sql.prepare('SELECT count(*) AS n FROM public_statistics').get().n, 0);
+  }
+});
+
 for (const failure of ['read', 'write']) test(`retention completes before aggregate ${failure} failure`, async () => {
   const db = new D1();
   const expired = event({ observed_at: '2026-01-01' });
@@ -118,7 +132,8 @@ for (const failure of ['read', 'write']) test(`retention completes before aggreg
       statement.run = async () => { throw new Error('aggregate write unavailable'); };
     return statement;
   };
-  await assert.rejects(aggregate(db, now), new RegExp(`aggregate ${failure} unavailable`));
+  const scheduled = createWorker(() => now).scheduled({}, { CENSUS_DB: db, PUBLIC_STATISTICS_ENABLED: 'true' });
+  await assert.rejects(scheduled, new RegExp(`aggregate ${failure} unavailable`));
   assert.deepEqual(db.sql.prepare('SELECT installation_id FROM observations').all().map(row => row.installation_id), [retained.installation_id]);
   assert.equal(db.sql.prepare('SELECT count(*) AS n FROM period_membership_sets').get().n, 2);
   assert.equal(db.sql.prepare('SELECT count(*) AS n FROM public_statistics').get().n, 0);

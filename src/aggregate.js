@@ -1,4 +1,3 @@
-import { prune } from './store.js';
 const MIN_INSTALLATIONS = 20;
 const round = count => Math.round(count / 10) * 10;
 export function publicStatistics(rows, period) {
@@ -25,9 +24,6 @@ export function publicStatistics(rows, period) {
   return result;
 }
 export async function aggregate(db, now = new Date()) {
-  // Privacy expiry must not depend on aggregate reads or publication succeeding.
-  // The previous month's samples are always inside the 90-day private window.
-  await prune(db, now);
   const current = now.toISOString().slice(0, 10);
   if (now.getUTCDate() >= 3) {
     const end = `${current.slice(0, 7)}-01`;

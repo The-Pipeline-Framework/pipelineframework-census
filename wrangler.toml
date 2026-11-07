@@ -6,6 +6,7 @@ preview_urls = false
 # Add the website route only after the privacy and ownership release gates.
 [vars]
 INGESTION_ENABLED = "false"
+PUBLIC_STATISTICS_ENABLED = "false"
 [observability]
 enabled = false
 [triggers]

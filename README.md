@@ -28,4 +28,4 @@ The [v1 schema](protocol/v1.schema.json), [protocol](docs/protocol.md), [storage
 
 The checked-in Worker configuration intentionally has no production route, a placeholder database ID, and `INGESTION_ENABLED=false`. Create a dedicated D1 database, apply migrations, configure its real binding and the website route, and set `IP_RATE_KEY` through Worker secret storage after the release gates. Never commit credentials. Set `INGESTION_ENABLED=true` only after verifying logging and privacy controls.
 
-The scheduled task runs private monthly aggregation and 90-day expiry. No raw-event endpoint exists. Public statistics are generated into a separate table; publishing that table is a separately approved site change.
+The scheduled task always runs 90-day expiry. Monthly statistics are written to a separate table only when `PUBLIC_STATISTICS_ENABLED=true`, which defaults to false. Keep both ingestion and statistics disabled during a restore. No raw-event endpoint exists. Publishing the statistics table is a separately approved site change.
