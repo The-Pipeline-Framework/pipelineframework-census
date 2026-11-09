@@ -7,6 +7,8 @@ import { createWorker } from '../src/worker.js';
 import { ingest, prune } from '../src/store.js';
 import { publicStatistics } from '../src/aggregate.js';
 import { validObservation, periodStarts } from '../src/protocol.js';
+import { buildPublicUsageSnapshot } from '../src/public-usage-export.js';
+import { latestCompleteWeek } from '../src/weeks.js';
 const now = new Date('2026-10-04T12:00:00Z');
 function event(overrides = {}) {
   return { schema_version: 1, installation_id: randomUUID(), application_instance_id: randomUUID(), observed_at: '2026-10-04',
@@ -156,4 +158,73 @@ test('private membership sets deduplicate days and union weeks across calendar m
   assert.notEqual(count('month', '2026-10-01').installations,
     count('week', '2026-09-28').installations + count('week', '2026-10-05').installations);
   assert.equal(db.sql.prepare("SELECT count(*) AS n FROM period_membership WHERE period_kind='month' AND period_start='2026-10-01'").get().n, 4);
+});
+
+const weeklyStart = '2026-11-02';
+const weeklyClose = new Date('2026-11-10T00:00:00.000Z');
+const weeklyEnv = db => ({ CENSUS_DB: db, PUBLIC_STATISTICS_ENABLED: 'true', PUBLIC_WEEKLY_FIRST_MONDAY: weeklyStart });
+const weeklyRows = db => db.sql.prepare('SELECT * FROM public_weekly_statistics ORDER BY week_start').all();
+
+test('weekly closure waits until Tuesday UTC and honours both publication settings', async () => {
+  const db = new D1();
+  await ingest(db, event({ observed_at: weeklyStart }), weeklyStart);
+  await ingest(db, event({ observed_at: '2026-10-26' }), '2026-10-26');
+  const justBefore = new Date('2026-11-09T23:59:59.999Z');
+  assert.equal(latestCompleteWeek(justBefore), '2026-10-26');
+  assert.equal(latestCompleteWeek(weeklyClose), weeklyStart);
+  assert.equal(latestCompleteWeek(new Date('2027-01-05T00:00:00Z')), '2026-12-28');
+  const scheduled = settings => createWorker(() => weeklyClose).scheduled({}, { ...weeklyEnv(db), ...settings });
+  await createWorker(() => justBefore).scheduled({}, weeklyEnv(db));
+  await scheduled({ PUBLIC_STATISTICS_ENABLED: 'false' });
+  await scheduled({ PUBLIC_WEEKLY_FIRST_MONDAY: '' });
+  await scheduled({ PUBLIC_WEEKLY_FIRST_MONDAY: '2026-11-09' });
+  await assert.rejects(scheduled({ PUBLIC_WEEKLY_FIRST_MONDAY: '2026-11-03' }), /must be a UTC Monday/);
+  assert.equal(weeklyRows(db).length, 0);
+  await scheduled({ PUBLIC_WEEKLY_FIRST_MONDAY: '2026-10-26' });
+  assert.deepEqual(weeklyRows(db).map(row => JSON.parse(row.statistics_json)), [
+    { week_start: weeklyStart, status: 'insufficient_contributors' }
+  ]);
+});
+
+test('weekly materialisation uses latest observations and suppresses marginal bins by installation', async () => {
+  const db = new D1();
+  const samples = Array.from({ length: 24 }, () => event({ observed_at: weeklyStart }));
+  for (const sample of samples) {
+    await ingest(db, sample, weeklyStart);
+    await ingest(db, { ...sample, observed_at: '2026-11-08', java_major: 25 }, '2026-11-09');
+  }
+  await ingest(db, { ...samples[0], observed_at: '2026-11-09', java_major: 99 }, '2026-11-09');
+  for (let i = 0; i < 25; i++) {
+    const sample = event({ installation_id: samples[0].installation_id, observed_at: weeklyStart, transport: 'GRPC', java_major: 25 });
+    await ingest(db, sample, weeklyStart);
+  }
+  const scheduled = () => createWorker(() => weeklyClose).scheduled({}, weeklyEnv(db));
+  await scheduled();
+  const [row] = weeklyRows(db);
+  const week = JSON.parse(row.statistics_json);
+  assert.equal(row.generated_at, weeklyClose.toISOString());
+  assert.equal(week.reporting_installations, 20);
+  assert.equal(week.reporting_application_instances, 50);
+  assert.deepEqual(week.distributions.transport, { status: 'suppressed' });
+  assert.deepEqual(week.distributions.java_major, { status: 'published', counts: { 25: 50 } });
+  assert.deepEqual(week.distributions.sizes.steps, { status: 'published', counts: { '2–5': 50 } });
+  assert.equal(row.statistics_json.includes(samples[0].installation_id), false);
+  assert.equal(row.statistics_json.includes(samples[0].application_instance_id), false);
+  const select = readFileSync(new URL('../scripts/select-public-usage.sql', import.meta.url), 'utf8');
+  const snapshot = buildPublicUsageSnapshot([{ success: true, results: db.sql.prepare(select).all() }], weeklyClose);
+  assert.deepEqual(snapshot.weeks.at(-1), week);
+  db.sql.exec('DELETE FROM observations');
+  await createWorker(() => new Date('2026-11-11T03:17:00Z')).scheduled({}, weeklyEnv(db));
+  assert.deepEqual(weeklyRows(db), [row]);
+});
+
+test('an empty weekly sample stays missing and an oversized sample fails closed', async () => {
+  const db = new D1();
+  const scheduled = () => createWorker(() => weeklyClose).scheduled({}, weeklyEnv(db));
+  await scheduled();
+  assert.equal(weeklyRows(db).length, 0);
+  db.sql.exec(`WITH RECURSIVE fixture(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM fixture WHERE n < 5001)
+    INSERT INTO observations SELECT 'test-only', printf('%d', n), '${weeklyStart}', '${weeklyStart}', '{}' FROM fixture`);
+  await assert.rejects(scheduled(), /Weekly statistics observation limit exceeded/);
+  assert.equal(weeklyRows(db).length, 0);
 });

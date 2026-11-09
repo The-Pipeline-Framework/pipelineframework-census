@@ -8,13 +8,14 @@ export function publicStatistics(rows, period) {
   const dimensions = ['compiler_version','contracts_version','java_major','transport','platform','runtime_layout',
     ...['pipelines','steps','types','blocks'].map(key => `sizes.${key}`),
     ...['nested_invocation','one_to_many','many_to_one','query','command','await'].map(key => `feature_counts.${key}`)];
+  const samples = rows.map(row => ({ installation: row.installation_id, value: JSON.parse(row.snapshot_json) }));
   for (const dimension of dimensions) {
     const bins = new Map();
-    for (const row of rows) {
-      const sample = JSON.parse(row.snapshot_json);
-      const value = dimension.split('.').reduce((value, key) => value[key], sample);
+    const path = dimension.split('.');
+    for (const sample of samples) {
+      const value = path.reduce((value, key) => value[key], sample.value);
       if (!bins.has(value)) bins.set(value, { count: 0, installations: new Set() });
-      bins.get(value).count++; bins.get(value).installations.add(row.installation_id);
+      bins.get(value).count++; bins.get(value).installations.add(sample.installation);
     }
     // Whole-dimension suppression prevents deriving a hidden cell from its complement.
     result.distributions[dimension] = [...bins.values()].some(bin => bin.installations.size < MIN_INSTALLATIONS)

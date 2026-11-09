@@ -1,6 +1,7 @@
 import { boundedJson, validObservation } from './protocol.js';
 import { ingest, prune } from './store.js';
 import { aggregate } from './aggregate.js';
+import { aggregateWeekly } from './weekly.js';
 const response = status => new Response(null, { status, headers: { 'cache-control': 'no-store' } });
 export function createWorker(clock = () => new Date()) {
   return {
@@ -29,7 +30,9 @@ export function createWorker(clock = () => new Date()) {
       if (!env.CENSUS_DB) return;
       const now = clock();
       await prune(env.CENSUS_DB, now);
-      if (env.PUBLIC_STATISTICS_ENABLED === 'true') await aggregate(env.CENSUS_DB, now);
+      if (env.PUBLIC_STATISTICS_ENABLED !== 'true') return;
+      await aggregate(env.CENSUS_DB, now);
+      await aggregateWeekly(env.CENSUS_DB, now, env.PUBLIC_WEEKLY_FIRST_MONDAY);
     }
   };
 }
