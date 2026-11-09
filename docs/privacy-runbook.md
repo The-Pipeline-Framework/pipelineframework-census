@@ -4,7 +4,7 @@
 
 Keep ingestion and the compiler public reporting gate disabled until a named owner records legal approval for default-on reporting and local identifier storage, terminal-storage/ePrivacy applicability, lawful basis, processors, international transfers, access rights and retention. Confirm website/account authority and assign an operator and privacy-request contact. This code is not evidence of legal compliance.
 
-Identifiers are persistent pseudonyms. Coarse feature combinations can still be distinctive. Developers may opt out with `TPF_TELEMETRY_DISABLED=true`; any disabling JVM or compiler option also wins. Known CI/containers without an explicit retained-state declaration do not report.
+Identifiers are persistent pseudonyms. Coarse feature combinations can still be distinctive. Developers may opt out with `TPF_CENSUS_ENABLED=false`. Any disabling JVM or compiler option also wins. Known CI and container environments require retained storage and `TPF_CENSUS_STATE_PERSISTENT=true`. Use `TPF_CENSUS_STATE_DIR` to select a managed state directory.
 
 Verify the deployment's CDN/WAF/security processing separately. Disable invocation/request/body logging and Logpush for this route, including rejected requests. The Worker sets `observability.enabled=false` and never logs requests, bodies, IPs, identifiers or schema failures. The edge sees IP addresses; they are transient inputs to an hourly HMAC limiter key using `IP_RATE_KEY`, not census data. Keep access to that secret restricted. Document provider retention rather than promising zero infrastructure IP processing.
 
